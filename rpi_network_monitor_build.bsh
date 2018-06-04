@@ -1,0 +1,524 @@
+#!/bin/bash
+# AUTHOR: Michael Petit
+# DATE: 11ap18
+#
+# Install Raspbery PI network monitoring tools
+#
+################################################################################
+
+# VARIBLES
+################################################################################
+TODAY=`date '+%Y_%m_%d'`
+DATETIME=`date '+%Y%m%d%H%M%S'`
+LOGGING="FALSE"
+FILENAME=`basename $0`
+DIRNAME=`dirname $0`
+AUTHOR="Michael Petit, michael.p.petit@gm.com, 586-864-7045"
+BUILDVERSION="1.0"
+
+# CHANGE OWNER TO USER
+# Usage: _chown <file or dir>
+# Example: _chown ./myfile.txt
+# Example: _chown ./mydir
+################################################################################
+_chown() {
+    sudo chown `whoami`:`id -gn` $1
+}
+
+# LOGGING
+# Usage: _log <log file name>
+# Example: _log ~/.$FILENAME-`date '+%Y%m%d%H%M%S'`.log
+# Example: _log ~/mylogfile.txt
+################################################################################
+_log() {
+    FOLDERPATH=`dirname $1`
+
+    if [ -w $FOLDERPATH ]; then
+        echo "Logging enabled to $1."
+        exec &> >(tee -a "$1")
+        LOGGING="TRUE"
+        LOGFILE="$1"
+    else
+	echo "ERROR: Cannot LOG - no write access to $FOLDERPATH"
+        LOGGING="FALSE"
+    fi
+}
+
+# PRINT MESSAGE
+#
+# Usage: _print [-opt] [message]
+#     Options:
+#         no [opt] and no [message] prints an empty line with \n 
+#	  no option with message, same as -s
+#         -s is standard print
+#         -d is dash line
+#         -i is INFO
+#         -e is ERROR
+#         -y is QUESTION [POPULATES $RPS]
+#         -t is TITLE
+# Example: _print 
+#    
+# Example: _print -d 
+#    =======================================================================
+# Example: _print "My Message
+#    My Message
+# Example: _print -s "My Message" 
+#    My Message
+# Example: _print -i "My Message" 
+#    INFO: My Message
+# Example: _print -e "My Error" 
+#    
+#    =======================================================================
+#    ERROR: My Error
+#    =======================================================================
+#    
+# Example: _print -t "My Title"
+#    My Title...
+#    =======================================================================
+# Example: _print -y "Do you want to exit" [value stored in $RSP]
+#    Do you want to exit ? [y/n] :
+#    =======================================================================
+#
+################################################################################
+_print() {
+    if [ "$#" == 1 ]; then
+        if [ "$1" == "-d" ] || [ "$1" == "d" ]; then
+            printf "=======================================================================\n"
+        else
+            printf "$1\n"
+        fi
+    elif [ "$#" > 1 ]; then
+        if [ "$1" == "-i" ] || [ "$1" == "i" ]; then
+            printf "INFO: $2\n"
+        elif [ "$1" == "-e" ] || [ "$1" == "e" ]; then
+            printf "\n=======================================================================\n"
+            printf "ERROR: $2\n"
+            printf "=======================================================================\n\n"
+        elif [ "$1" == "-t" ] || [ "$1" == "t" ]; then
+            printf "\n$2...\n"
+            printf "=======================================================================\n"
+        elif [ "$1" == "-s" ] || [ "$1" == "s" ]; then
+            printf "$2\n"
+        elif [ "$1" == "-y" ] || [ "$1" == "y" ]; then
+            printf "\n=======================================================================\n"
+            read -p "$2 ? [y/n] :" RSP;
+            printf "Response: $RSP\n"
+        else
+            printf "$1\n"
+        fi
+    else
+        printf "\n"
+    fi
+}
+
+# INPUT
+# Usage: _question <question> <default>
+# Example: _question "Enter full name" "Mike Petit"
+# 	_print "$RSP"
+# 	Mike Petit
+################################################################################
+_question() {
+    _print
+    read -p "$1 ? [$2] :" RSP;
+    if [ "$RSP" == "" ]; then
+        RSP=$2
+    fi 
+
+}
+
+# GET DIRECTORY
+# Usage: _getdir <question> <default>
+# Example: 
+#    BASEDIR=/data
+#    _getdir "Root directory for directories" "$BASEDIR"
+#    BASEDIR=$DIRECTORY
+################################################################################
+_getdir() {
+    if [ "$#" != 2 ]; then
+        _print "Invalide _getdir request"
+        return
+    fi
+
+    DIRECTORY=$2
+    read -p "$1 ? [$2] :" RSP;
+    if [ "$RSP" == "" ]; then
+        DIRECTORY=$2
+    elif [ "$RSP" == "~" ]; then
+        DIRECTORY="$HOME"
+    else
+        DIRECTORY="$RSP"
+        _substrgcompare $DIRECTORY "/"
+        if [ "$RSP" == "FALSE" ]; then
+            _print "'$DIRECTORY' not absolute, creating in $HOME"
+            DIRECTORY="$HOME/$DIRECTORY"
+        fi
+    fi
+}
+
+# UPDATE
+# Usage: _update
+# Example: _update
+################################################################################
+_update() {
+    _print "Updating apt cache..."
+    sudo apt-get update
+}
+
+# UPGRADE
+# Usage: _upgrade
+# Example: _upgrade
+################################################################################
+_upgrade() {
+    _print "Upgrading system..."
+    sudo apt-get update
+    sudo apt-get --yes upgrade
+    sudo apt-get update
+}
+
+# UPGRADE DISTRIBUTION
+# Usage: _upgrade
+# Example: _upgrade
+################################################################################
+_dist-upgrade() {
+    _print "Upgrading distribution..."
+    sudo apt-get update
+    sudo apt-get --yes dist-upgrade
+    sudo apt-get update
+}
+
+# INSTALL
+# Usage: _install <package name>
+# Example: _install vim
+################################################################################
+_installold() {
+    if [ "$#" == 1 ]; then
+        PACKAGELIST=`sudo dpkg-query -l | grep "$1" | wc -l`
+	if [ "$PACKAGELIST" != "0" ]; then
+	    _print "$1 already installed."
+	else
+	    sudo apt-get --yes install "$1"
+	fi
+    else
+	_print "No package to install."
+    fi
+}
+
+# BUILD TYPE
+# Usage: _buildtype
+# Example: _buildtype
+################################################################################
+_isvirtual() {
+    if sudo dmesg | grep -q "Hypervisor detected"; then
+        BUILDTYPE="VM"
+    else
+        BUILDTYPE="PHY"
+    fi
+
+    _print "BUILDTYPE set to: $BUILDTYPE"
+}
+
+# SYSTEM INFO
+# Usage: _sysinfo
+# Example: _sysinfo
+################################################################################
+_sysinfo() {
+    if [ "$LOGGING" == "TRUE" ]; then
+	sudo dmidecode >> $LOGFILE
+        sudo dmesg >> $LOGFILE
+        hostnamectl status >> $LOGFILE
+        _print "System information added to $LOGFILE"
+    else
+        sudo dmidecode
+        sudo dmesg
+        hostnamectl status
+    fi
+}
+
+# GITCLONE
+# Usage: _gitclone <gitlab cmb repository> <local source dir within BASE> <git bransh> [<git url>]
+# Example: _gitclone cmb-superbuild CMB-SuperBuild release
+################################################################################
+_gitclone() {
+    GITSRC=$1
+    GITBRANCH=$2
+
+    _print -t "Clone ${GITSRC^^} [${GITBRANCH^^}]"
+
+    cd ${SRCDIR}
+    if [ -d ${SRCDIR}/$GITSRC ]; then
+	_print -y "$GITSRC exists. Do you want a fresh copy"
+	if [ "$RSP" == "y" ] || [ "$RSP" == "Y" ]; then
+	    MOVETOFOLDER=${SRCDIR}/$GITSRC-${DATETIME}
+	    _print "${GITSRC^^} directory exists. Moving to ${MOVETOFOLDER}"
+	    sudo mv ${SRCDIR}/$GITSRC ${MOVETOFOLDER}
+	else
+	    return
+	fi
+    fi
+
+    if [ $# == 2 ]; then
+	git clone https://gitlab.kitware.com/cmb/${GITSRC}.git
+    else
+	git clone ${3}${GITSRC}.git
+    fi
+
+    _chown ${GITSRC,,}
+    cd ${GITSRC,,}
+    git checkout $GITBRANCH
+    git submodule update --init --recursive
+}
+
+# GET
+# Usage: _get <url> <local source dir within BASE>
+# Example: _get  https://cmake.org/files/v3.10/cmake-3.10.0.tar.gz CMake 
+################################################################################
+_get() {
+    URL=$1
+    PACKAGE=$2
+
+    _print -t "Get $URL"
+
+    cd ${SRCDIR}
+
+    if [ ! -f ${URL##*/} ]; then
+	wget $URL
+	tar xvf ${URL##*/}
+    else
+	_print "$PACKAGE UP TO DATE"
+    fi
+}
+
+# COMPARE
+################################################################################
+_substrgcompare() {
+    if [[ "$1" == *"$2"* ]]; then 
+	RSP="TRUE"
+    else
+	RSP="FALSE"
+    fi
+}
+
+# IS APP INSTALLED [command name, not package name]
+################################################################################
+_isinstalled() {
+    if which $1 > /dev/null; then
+	RSP="TRUE"
+    else
+	RSP="FALSE"
+    fi
+}
+
+# IS PACKAGE INSTALLED
+################################################################################
+_ispackageinstalled() {
+    if dpkg-query -W -f'${status}' "$1" 2>/dev/null | grep -q "ok installed"; then
+	RSP="TRUE"
+	_print "$1 is already installed"
+    else
+	RSP="FALSE"
+	_print "$1 is not installed"
+    fi
+}
+
+# INSTALL PACKAGE
+################################################################################
+_installpackage() {
+    _ispackageinstalled $1
+    if [ "$RSP" == "FALSE" ]; then
+	sudo apt-get --yes install $1
+    fi
+}
+
+# INSTALL [duplicate to test both]
+# Usage: _install <package name>
+# Example: _install vim
+################################################################################
+_install() {
+    if [ "$#" == 1 ]; then
+	PACKAGELIST=`sudo dpkg-query -l | grep "$1" | wc -l`
+	if [ "$PACKAGELIST" != "0" ]; then
+	    _print "$1 already installed."
+	else
+	    sudo apt-get --yes install "$1"
+	fi
+    else
+	_print "No package to install."
+    fi
+}
+
+################################################################################
+################################################################################
+# MAIN
+################################################################################
+################################################################################
+_print $FILENAME
+_print -t "Configure RPI Network Monitor"
+
+_log "./$FILENAME-$DATETIME.log"
+
+# Upgrade
+_update
+_upgrade
+_dist-upgrade
+_update
+
+# Validate config compelte
+_print -y "RPI Configuration Settings compelte? (password, local, hostname, SSH)"
+if [ "$RSP" != "y" ]; then
+    exit
+fi
+
+_print "Install packages"
+_install git
+_install dh-autoreconf 
+_install autoconf 
+_install automake 
+_install libtool 
+_install gcc 
+_install make 
+_install libssl-dev 
+_install libevent-dev 
+_install libgeoip-dev 
+_install python 
+_install python-pip 
+_install paris-traceroute 
+_install screen
+_install nslookup
+_install nbtscan
+_install mtr
+_install nmap
+_install nethogs
+_install apt-transport-https 
+_install ca-certificates 
+_install curl 
+_install gnupg2 
+_install software-properties-common
+_install apt-transport-https
+_install ca-certificates
+_install gnupg2
+sudo apt install -y python python-pip
+sudo pip install gspread
+sudo pip install --upgrade google-api-python-client
+
+# SSH
+_print "SSH keygen..."
+cd ~/.ssh && ssh-keygen
+#chmod 755 speedtest.py 
+
+# No Machine
+_ispackageinstalled nomachine
+if [ "$RSP" == "FALSE" ]; then
+    _print "NoMachine install..."
+    cd ~
+    wget http://download.nomachine.com/download/6.1/Raspberry/nomachine_6.1.6_4_armhf.deb 
+    sudo dpkg -i nomachine_6.1.6_4_armhf.deb
+else
+    _print "NoMachine already installed"
+fi
+
+## NDT Setup
+#_print "NDT Setup..."
+#if [ 1 -eq 0 ]; then # SKIP BLOCK
+    #cd ~
+    #mkdir mk-pi
+    #cd mk-pi/
+    #git -init
+    #git config --global user.name "mike"
+    #sudo git clone --recursive https://github.com/opentechinstitute/mk-rpi.git
+    #_print "(EDIT FILES - need to research issue in run.py)"
+    #sudo ./setup.sh -u pi
+    #cd test-runner/
+    #python run.py
+#fi
+
+# Speedtest-cli Setup
+_ispackageinstalled speedtest-cli
+if [ "$RSP" == "FALSE" ]; then
+    _print "Speedtest-cli install..."
+    cd ~
+    mkdir speedtest
+    cd speedtest
+    git clone https://github.com/sivel/speedtest-cli.git
+    cd speedtest-cli
+    sudo python setup.py install
+
+    cd
+    _print "TEST Speedtest-cli once..."
+    speedtest-cli # this runs it once
+else
+    _print "speedtest-cli already installed"
+fi
+
+# Iperf3
+_print "iperf and iperf3 install..."
+_install iperf
+_install iperf3
+
+## perfSONAR
+#if [ 1 -eq 0 ]; then # SKIP BLOCK
+    #_print "perfSONAR install..."
+    #cd /etc/apt/sources.list.d/
+    #sudo wget http://downloads.perfsonar.net/debian/perfsonar-jessie-release.list
+    #sudo wget -qO - http://downloads.perfsonar.net/debian/perfsonar-debian-official.gpg.key | sudo apt-key add -
+    #_update
+    #_install perfsonar-toolkit
+    #sudo /usr/lib/perfsonar/scripts/install-optional-packages.py
+    #sudo /usr/lib/perfsonar/scripts/configure_ntpd new
+    #sudo service ntp restart
+    #sudo /usr/sbin/ntpq -p
+    #sudo /usr/lib/perfsonar/scripts/configure_sysctl
+    #sudo /usr/lib/perfsonar/scripts/service_watcher
+    #
+    ##Register your services
+    ##Note: this step can be done through the web interface if the perfsonar-toolkit bundle was installed.
+    ##See Updating Administrative Information.
+    ##No actual configuration is required but filling fields such as administrator_email, site_name, city,
+    ##country, latitude, longitude, etc. are highly recommended. You can add these by removing the leading #
+    ##of any property and filling it out with a proper value for your host. Changes will be picked-up
+    ##automatically without need for any restarts.
+    #
+    #sudo service pscheduler-scheduler status
+    #sudo service pscheduler-runner status
+    #sudo service pscheduler-archiver status
+    #sudo service pscheduler-ticker status
+    #sudo service owamp-server status
+    #sudo service bwctl-server status
+    #sudo service perfsonar-lsregistrationdaemon status
+    #
+    ##Configuring Central Management
+    ##If your node is part of a measurement mesh and you installed perfsonar-centralmanagement bundle refer
+    ##to the documentation here: Central Configuration Overview
+    #
+    ##Configuring perfSONAR through the web interface
+    ##After installing the perfsonar-toolkit bundle, you can refer to the general perfSONAR configuration
+    ##from Configuring the Toolkit for the First Time.
+#fi
+#
+## Docker
+#_ispackageinstalled docker-ce
+#if [ "$RSP" == "FALSE" ]; then
+    #_print "Docker install..."
+    #uname -r # must be kernel 3.10+
+    #_print "Is the kernel version 3.10 or greater"
+#
+    #_update
+#
+    #curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg | sudo apt-key add -
+    #echo "deb [arch=armhf] https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list
+#
+    #_update
+    #_install docker-ce
+#
+    #sudo systemctl enable docker
+    #sudo systemctl start docker
+    #
+    #pip install docker-compose
+ #
+    #_print "Test Docker..."
+    #sudo docker run --rm arm32v7/hello-world
+#else
+    #_print "docker already installed"
+#fi
+
+_print "All DONE!"
+_print "Next, run rpi_network_monitor_test.bsh"

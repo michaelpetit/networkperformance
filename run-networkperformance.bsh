@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+while :
+do
+    sudo python ./networkperformance/networkperformance.py
+    sleep 30m
+done

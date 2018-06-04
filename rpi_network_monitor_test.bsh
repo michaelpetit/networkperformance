@@ -1,0 +1,232 @@
+#!/bin/bash
+# AUTHOR: Michael Petit
+# DATE: 11ap18
+#
+# Test Raspbery PI network monitoring tools
+#
+################################################################################
+
+# VARIBLES
+################################################################################
+TODAY=`date '+%Y_%m_%d'`
+DATETIME=`date '+%Y%m%d%H%M%S'`
+LOGGING="FALSE"
+FILENAME=`basename $0`
+DIRNAME=`dirname $0`
+
+# CHANGE OWNER TO USER
+# Usage: _chown <file or dir>
+# Example: _chown ./myfile.txt
+# Example: _chown ./mydir
+################################################################################
+_chown() {
+    sudo chown `whoami`:`id -gn` $1
+}
+
+# LOGGING
+# Usage: _log <log file name>
+# Example: _log ~/.$FILENAME-`date '+%Y%m%d%H%M%S'`.log
+# Example: _log ~/mylogfile.txt
+################################################################################
+_log() {
+    FOLDERPATH=`dirname $1`
+
+    if [ -w $FOLDERPATH ]; then
+        echo "Logging enabled to $1."
+        exec &> >(tee -a "$1")
+        LOGGING="TRUE"
+        LOGFILE="$1"
+    else
+	echo "ERROR: Cannot LOG - no write access to $FOLDERPATH"
+        LOGGING="FALSE"
+    fi
+}
+
+# PRINT MESSAGE
+#
+# Usage: _print [-opt] [message]
+#     Options:
+#         no [opt] and no [message] prints an empty line with \n 
+#	  no option with message, same as -s
+#         -s is standard print
+#         -d is dash line
+#         -i is INFO
+#         -e is ERROR
+#         -y is QUESTION [POPULATES $RPS]
+#         -t is TITLE
+# Example: _print 
+#    
+# Example: _print -d 
+#    =======================================================================
+# Example: _print "My Message
+#    My Message
+# Example: _print -s "My Message" 
+#    My Message
+# Example: _print -i "My Message" 
+#    INFO: My Message
+# Example: _print -e "My Error" 
+#    
+#    =======================================================================
+#    ERROR: My Error
+#    =======================================================================
+#    
+# Example: _print -t "My Title"
+#    My Title...
+#    =======================================================================
+# Example: _print -y "Do you want to exit" [value stored in $RSP]
+#    Do you want to exit ? [y/n] :
+#    =======================================================================
+#
+################################################################################
+_print() {
+    if [ "$#" == 1 ]; then
+        if [ "$1" == "-d" ] || [ "$1" == "d" ]; then
+            printf "=======================================================================\n"
+        else
+            printf "$1\n"
+        fi
+    elif [ "$#" > 1 ]; then
+        if [ "$1" == "-i" ] || [ "$1" == "i" ]; then
+            printf "INFO: $2\n"
+        elif [ "$1" == "-e" ] || [ "$1" == "e" ]; then
+            printf "\n=======================================================================\n"
+            printf "ERROR: $2\n"
+            printf "=======================================================================\n\n"
+        elif [ "$1" == "-t" ] || [ "$1" == "t" ]; then
+            printf "\n$2...\n"
+            printf "=======================================================================\n"
+        elif [ "$1" == "-s" ] || [ "$1" == "s" ]; then
+            printf "$2\n"
+        elif [ "$1" == "-y" ] || [ "$1" == "y" ]; then
+            printf "\n=======================================================================\n"
+            read -p "$2 ? [y/n] :" RSP;
+            printf "Response: $RSP\n"
+        else
+            printf "$1\n"
+        fi
+    else
+        printf "\n"
+    fi
+}
+
+# BUILD TYPE
+# Usage: _buildtype
+# Example: _buildtype
+################################################################################
+_isvirtual() {
+    if sudo dmesg | grep -q "Hypervisor detected"; then
+        BUILDTYPE="VM"
+    else
+        BUILDTYPE="PHY"
+    fi
+
+    _print "BUILDTYPE set to: $BUILDTYPE"
+}
+
+# SYSTEM INFO
+# Usage: _sysinfo
+# Example: _sysinfo
+################################################################################
+_sysinfo() {
+    if [ "$LOGGING" == "TRUE" ]; then
+	sudo dmidecode >> $LOGFILE
+        sudo dmesg >> $LOGFILE
+        hostnamectl status >> $LOGFILE
+        _print "System information added to $LOGFILE"
+    else
+        sudo dmidecode
+        sudo dmesg
+        hostnamectl status
+    fi
+}
+
+# PAUSE
+# Usage: _pause
+# Example: _sysinfo
+################################################################################
+_pause() {
+    _print -y "Paused... Continue"
+}
+
+################################################################################
+################################################################################
+# MAIN
+################################################################################
+################################################################################
+_print $FILENAME
+_print -t "Testing RPI Network Monitor"
+
+_log "./$FILENAME-$DATETIME.log"
+
+_sysinfo
+_isvirtual
+
+_print "Test docker..."
+sudo docker run armhf/hello-world
+_pause
+   
+_print "Test paris-traceroute..."
+sudo paris-traceroute google.com
+_pause
+
+_print "Test speedtest-cli..."
+speedtest-cli --csv-header
+speedtest-cli --csv --timeout 30 --bytes --csv-delimiter ';'
+speedtest-cli --json --timeout 30 --bytes --csv-delimiter ';'
+_pause
+
+_print "Test nbtscan..."
+nbtscan 10.10.10.1
+_pause
+
+_print "Test mtr..."
+sudo mtr google.com
+_pause
+
+_print "Test nethogs..."
+sudo nethogs 
+_pause
+
+#_print "Test iperf..."
+#iperf -c <ip of public iperf server> (have not found one yet)
+#_pause
+
+_print "Test iperf3..."
+iperf3 -c iperf.scottlinux.com
+iperf3 -c iperf.he.net
+_pause
+
+_print "Test ndt..."
+#python ~/mk-pi/test-runner/run.py # (interactive)
+_pause
+
+_print "Test nslookup..."
+nslookup 172.217.0.14
+_pause
+
+#_print "Test nsupdate..."
+#nsupdate <ip>
+
+_print "Test dig..."
+dig -x 172.217.0.14
+_pause
+
+_print "Testing nmap..."
+nmap -sP 10.10.10.* && arp -a -n
+#sudo nmap -sP -PS22,3389 192.168.2.1/24 #custom TCP SYN scan
+#sudo nmap -sP -PU161 192.168.2.1/24 #custom UDP scan
+#nmap -sP -PA21,22,25,3389 192.168.2.1/24 #21 is used by ftp
+#nmap $1 -n -sP | grep report | awk '{print $5}'
+_pause
+
+_print "Testing perfSONAR..."
+_print "    NOT LOADED YET..."
+
+_print "Testing Murakami..."
+docker run -d --name mlab -v data:/data -v ~/share:/share --restart always m-lab/murakami 
+
+_print "Done Testing!"
+
+
+
+
